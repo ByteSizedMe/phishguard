@@ -1,34 +1,54 @@
-import Router from "express";
-import analyzeUrl from "../services/url-analyzer.service";
+import { Router } from "express";
+import { analyzeUrl } from "../services/url-analyzer.service";
+import { assess } from "../services/risk-scoring.service";
 
 const analyzeRouter = Router();
 
 analyzeRouter.post("/", (req, res) => {
-    const url = req.body.url;
+  const urls = req.body.urls;
 
-    if(url == null){
-        res.status(400).json({error: "URL is required"});
-        return;
-    } 
+  if (urls == null) {
+    res.status(400).json({ error: "URLs are required" });
+    return;
+  }
 
-    if(typeof url !== "string"){
-        res.status(400).json({error: "URL is not a string"});
-        return;
-    }
+  if (!Array.isArray(urls)) {
+    res.status(400).json({ error: "URLs must be an array" });
+    return;
+  }
 
-    if(url.trim() === ""){
-        res.status(400).json({error: "URL is empty"});
-        return;
-    }
+  if (urls.length === 0) {
+    res.status(400).json({ error: "URL list is empty" });
+    return;
+  }
 
-    try{
-        const result = analyzeUrl(url);
-        res.json(result);
+  if (urls.some((url) => typeof url !== "string")) {
+    res.status(400).json({ error: "Every URL must be a string" });
+    return;
+  }
+
+  if (urls.some((url) => url.trim() === "")) {
+    res.status(400).json({ error: "URL cannot be empty" });
+    return;
+  }
+
+  const results = urls.map((url) => {
+    try {
+      const result = analyzeUrl(url);
+      const assessment = assess(result);
+      return {
+        url,
+        ...assessment,
+      };
+    } catch {
+      return {
+        url,
+        error: "Invalid URL",
+      };
     }
-    catch{
-        res.status(400).json({error: "Invalid URL"});
-        return;
-    }
+  });
+
+  res.json(results);
 });
 
 export default analyzeRouter;

@@ -1,6 +1,8 @@
 import * as net from "node:net";
+import { parse } from "tldts";
 
-interface UrlAnalysis {
+export interface UrlAnalysis {
+  parsedUrl: URL;
   url: string;
   protocol: string;
   hostname: string;
@@ -21,12 +23,35 @@ interface UrlAnalysis {
   dotCount: number;
   encodedCharCount: number;
   queryLength: number;
+  username: string;
+  password: string;
+  redirectParams: URLSearchParams;
+  tld: string;
+  domain: string | null;
+  subdomain: string | null;
+  hasPunyCode: boolean;
+  doubleEncodedCharCount: {
+    hostname: number;
+    pathname: number;
+    query: number;
+    username: number;
+    password: number;
+  };
+  suspiciousEncoding: SuspiciousEncoding[];
 }
 
-function analyzeUrl(url: string): UrlAnalysis {
+type EncodingLocation = "username" | "password" | "pathname" | "query";
+
+export interface SuspiciousEncoding {
+  encoding: string;
+  location: EncodingLocation;
+}
+
+export function analyzeUrl(url: string): UrlAnalysis {
   const parsedUrl = new URL(url);
 
   const result: UrlAnalysis = {
+    parsedUrl: parsedUrl,
     url: url,
     protocol: parsedUrl.protocol,
     hostname: parsedUrl.hostname,
@@ -40,13 +65,31 @@ function analyzeUrl(url: string): UrlAnalysis {
     hasAtSymbol: url.includes("@"),
     hostnameLength: parsedUrl.hostname.length,
     pathnameLength: parsedUrl.pathname.length,
-    digitCount: (parsedUrl.hostname.match(/\d/g) || []).length,
+    digitCount: isIP(parsedUrl)
+      ? 0
+      : (parsedUrl.hostname.match(/\d/g) || []).length,
     isHttps: parsedUrl.protocol === "https:",
     specialCharCount: specialCharCount(url),
-    hyphenCount: (url.match(/-/g) || []).length,
-    dotCount: (url.match(/\./g) || []).length,
+    hyphenCount: (parsedUrl.hostname.match(/-/g) || []).length,
+    dotCount: (parsedUrl.hostname.match(/\./g) || []).length,
     encodedCharCount: encodedCharCount(url),
     queryLength: parsedUrl.search.length,
+    username: parsedUrl.username,
+    password: parsedUrl.password,
+    redirectParams: parsedUrl.searchParams,
+    tld: getTld(parsedUrl),
+    domain: findDomain(parsedUrl.hostname),
+    subdomain: findSubDomain(parsedUrl.hostname),
+    hasPunyCode: parsedUrl.hostname
+      .split(".")
+      .some((label) => label.toLowerCase().startsWith("xn--")),
+    doubleEncodedCharCount: doubleEncodedCharCount(parsedUrl),
+    suspiciousEncoding: [
+      ...findSuspiciousEncoded(parsedUrl.username, "username"),
+      ...findSuspiciousEncoded(parsedUrl.password, "password"),
+      ...findSuspiciousEncoded(parsedUrl.pathname, "pathname"),
+      ...findSuspiciousEncoded(parsedUrl.search, "query"),
+    ],
   };
 
   return result;
@@ -58,8 +101,7 @@ function isIP(parsedUrl: URL): boolean {
 }
 
 function subdomainCount(parsedUrl: URL): number {
-  if (isIP(parsedUrl) || parsedUrl.hostname === "localhost") return 0;
-  return parsedUrl.hostname.split(".").length - 2;
+  return parse(parsedUrl.hostname).subdomain?.split(".").length ?? 0;
 }
 
 function specialCharCount(url: string): number {
@@ -83,4 +125,50 @@ function encodedCharCount(url: string): number {
   return encodedCount;
 }
 
-export default analyzeUrl;
+function getTld(parsedUrl: URL): string {
+  return parsedUrl.hostname.split(".").pop() ?? "";
+}
+
+function findDomain(hostname: string): string | null {
+  const result = parse(hostname);
+  return result.domain;
+}
+
+function findSubDomain(hostname: string): string | null {
+  const result = parse(hostname);
+  return result.subdomain;
+}
+
+function doubleEncodedCharCount(parsedUrl: URL): {
+  hostname: number;
+  pathname: number;
+  query: number;
+  username: number;
+  password: number;
+} {
+  const pattern = /%25[0-9a-fA-F]{2}/g;
+
+  return {
+    hostname: parsedUrl.hostname.match(pattern)?.length ?? 0,
+    pathname: parsedUrl.pathname.match(pattern)?.length ?? 0,
+    query: parsedUrl.search.match(pattern)?.length ?? 0,
+    username: parsedUrl.username.match(pattern)?.length ?? 0,
+    password: parsedUrl.password.match(pattern)?.length ?? 0,
+  };
+}
+
+function findSuspiciousEncoded(
+  value: string,
+  location: EncodingLocation,
+): SuspiciousEncoding[] {
+  const matches = value.match(/%[0-9a-fA-F]{2}/g) ?? [];
+
+  const suspiciousEncoded = new Set(["%2f", "%40", "%3f", "%23"]);
+
+  return matches
+    .filter((match) => suspiciousEncoded.has(match.toLowerCase()))
+    .map((match) => ({
+      encoding: match,
+      location: location,
+    }));
+}
