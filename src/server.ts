@@ -1,4 +1,5 @@
 import express from "express";
+import "dotenv/config";
 import analyzeRouter from "./routes/analyze.routes";
 
 const app = express();

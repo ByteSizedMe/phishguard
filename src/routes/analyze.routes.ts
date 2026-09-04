@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { analyzeUrl } from "../services/url-analyzer.service";
 import { assess } from "../services/risk-scoring.service";
+import { checkGoogleSafeBrowsing } from "../services/googleSafeBrowsing";
+import { checkURLhaus, checkURLhausHost } from "../services/urlhaus";
 
 const analyzeRouter = Router();
 
-analyzeRouter.post("/", (req, res) => {
+analyzeRouter.post("/", async (req, res) => {
   const urls = req.body.urls;
 
   if (urls == null) {
@@ -32,21 +34,46 @@ analyzeRouter.post("/", (req, res) => {
     return;
   }
 
-  const results = urls.map((url) => {
-    try {
-      const result = analyzeUrl(url);
-      const assessment = assess(result);
-      return {
-        url,
-        ...assessment,
-      };
-    } catch {
-      return {
-        url,
-        error: "Invalid URL",
-      };
-    }
-  });
+  const results = await Promise.all(
+    urls.map(async (url) => {
+      let result;
+
+      try {
+        result = analyzeUrl(url);
+      } catch {
+        return {
+          url,
+          error: "Invalid URL",
+        };
+      }
+
+      try {
+        const [googleResult, urlhausResult, urlhausHostResult] =
+          await Promise.all([
+            checkGoogleSafeBrowsing(url),
+            checkURLhaus(url),
+            checkURLhausHost(url),
+          ]);
+
+        const assessment = assess(
+          result,
+          googleResult,
+          urlhausResult,
+          urlhausHostResult,
+        );
+
+        return {
+          url,
+          ...assessment,
+        };
+      } catch {
+        return {
+          url,
+          error: "Reputation check failed",
+        };
+      }
+    }),
+  );
 
   res.json(results);
 });

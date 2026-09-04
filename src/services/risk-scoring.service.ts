@@ -1,5 +1,6 @@
 import { SuspiciousEncoding, UrlAnalysis } from "./url-analyzer.service";
 import { parse } from "tldts";
+import { URLhausMatchedUrl } from "./urlhaus";
 
 export interface RiskAssessment {
   score: number;
@@ -88,7 +89,27 @@ function normalize(value: number, baseline: number, max: number): number {
   return Math.min(result, 1);
 }
 
-export function assess(UrlData: UrlAnalysis): RiskAssessment {
+export function assess(
+  UrlData: UrlAnalysis,
+  googleCheck: {
+    isThreat: boolean;
+    threatTypes: string[];
+  },
+  urlHausCheck: {
+    isMalicious: boolean;
+    urlStatus: string | null;
+    threat: string | null;
+  },
+  urlHausHostCheck: {
+    isMalicious: boolean;
+    urlCount: number;
+    blacklists: {
+      spamhaus_dbl: string;
+      surbl: string;
+    } | null;
+    matchedUrls: URLhausMatchedUrl[];
+  },
+): RiskAssessment {
   const signals = [
     checkIpAddress(UrlData.isIpAddress),
     checkAtSymbol(UrlData.url, UrlData.username),
@@ -108,6 +129,9 @@ export function assess(UrlData: UrlAnalysis): RiskAssessment {
     checkPunycode(UrlData.hasPunyCode),
     ...checkDoubleEncoding(UrlData.doubleEncodedCharCount),
     checkSuspiciousEncoding(UrlData.suspiciousEncoding),
+    checkGoogleResult(googleCheck),
+    checkUrlHausResult(urlHausCheck),
+    checkUrlHausHostResult(urlHausHostCheck, urlHausCheck),
   ].filter((signal): signal is RiskSignal => signal !== null);
 
   const score = signals.reduce((total, signal) => total + signal.points, 0);
@@ -531,4 +555,82 @@ function checkCount(feature: string, count: number): RiskSignal | null {
   }
 
   return null;
+}
+
+function checkGoogleResult(googleResult: {
+  isThreat: boolean;
+  threatTypes: string[];
+}): RiskSignal | null {
+  if (!googleResult.isThreat) return null;
+
+  let score = 0;
+  let threatType = "Unknown Google Safe Browsing threat";
+  const feature = "googleSafeBrowsing";
+
+  googleResult.threatTypes.forEach((threat: string) => {
+    if (threat === "MALWARE" && score < 100) {
+      threatType = "malware";
+      score = 100;
+    } else if (threat === "SOCIAL_ENGINEERING" && score < 100) {
+      threatType = "social engineering";
+      score = 100;
+    } else if (threat === "UNWANTED_SOFTWARE" && score < 80) {
+      threatType = "unwanted software";
+      score = 80;
+    } else if (threat === "POTENTIALLY_HARMFUL_APPLICATION" && score < 70) {
+      threatType = "potentially harmful application";
+      score = 70;
+    }
+  });
+
+  return {
+    feature,
+    message: `Google Safe Browsing flagged this URL as ${threatType}`,
+    points: score,
+  };
+}
+
+function checkUrlHausResult(urlHausResult: {
+  isMalicious: boolean;
+  urlStatus: string | null;
+  threat: string | null;
+}): RiskSignal | null {
+  if (!urlHausResult.isMalicious || urlHausResult.threat === null) return null;
+
+  const message =
+    urlHausResult.urlStatus === "offline"
+      ? `URLhaus reports this URL as malicious (${urlHausResult.threat}) (currently inactive)`
+      : `URLhaus reports this URL as malicious (${urlHausResult.threat})`;
+
+  return {
+    feature: "urlhaus",
+    message: message,
+    points: 80,
+  };
+}
+
+function checkUrlHausHostResult(
+  urlHausHostResult: {
+    isMalicious: boolean;
+    urlCount: number;
+    blacklists: {
+      spamhaus_dbl: string;
+      surbl: string;
+    } | null;
+    matchedUrls: URLhausMatchedUrl[];
+  },
+  urlHausResult: {
+    isMalicious: boolean;
+    urlStatus: string | null;
+    threat: string | null;
+  },
+): RiskSignal | null {
+  if (!urlHausHostResult.isMalicious) return null;
+  if (urlHausResult.isMalicious) return null;
+
+  return {
+    feature: "urlhausHost",
+    message: `URLhaus reports ${urlHausHostResult.urlCount} malicious URL(s) associated with this host`,
+    points: 0,
+  };
 }
