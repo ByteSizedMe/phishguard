@@ -7,7 +7,8 @@ apiRouter.post("/", async (req, res) => {
   try {
     const apiKey = await generateApiKey();
     res.json(apiKey);
-  } catch {
+  } catch (error) {
+    console.error("API key generation failed:", error);
     res.status(500).json({
       error: "Failed to generate API key",
     });
