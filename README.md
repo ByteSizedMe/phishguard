@@ -406,20 +406,6 @@ Risk scores are **indicators**, not absolute classifications.
 
 ---
 
-## Roadmap
-
-- [ ] Public API key provisioning with user accounts
-- [ ] API key revocation and expiration
-- [ ] Persistent rate limiting via Redis
-- [ ] Expanded legitimate-domain dataset
-- [ ] Additional reputation providers
-- [ ] Automated database migrations
-- [ ] CI/CD pipeline and automated testing
-- [ ] Production monitoring and structured logging
-- [ ] Frontend dashboard for analysis and history
-
----
-
 ## Status
 
 **PhishGuard v1** — core backend complete.
