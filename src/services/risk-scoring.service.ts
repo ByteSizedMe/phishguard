@@ -1,6 +1,9 @@
 import { SuspiciousEncoding, UrlAnalysis } from "./url-analyzer.service";
 import { parse } from "tldts";
 import { URLhausMatchedUrl } from "./urlhaus";
+import { checkTyposquatting } from "./typosquatting.service";
+import { legitimateDomains } from "../data/legitimate-domains";
+import { saveAnalysis } from "./analysis-history.service";
 
 export interface RiskAssessment {
   score: number;
@@ -89,8 +92,9 @@ function normalize(value: number, baseline: number, max: number): number {
   return Math.min(result, 1);
 }
 
-export function assess(
+export async function assess(
   UrlData: UrlAnalysis,
+  typosquattingCheck: ReturnType<typeof checkTyposquatting>,
   googleCheck: {
     isThreat: boolean;
     threatTypes: string[];
@@ -109,7 +113,8 @@ export function assess(
     } | null;
     matchedUrls: URLhausMatchedUrl[];
   },
-): RiskAssessment {
+  apiKeyId: number,
+): Promise<RiskAssessment> {
   const signals = [
     checkIpAddress(UrlData.isIpAddress),
     checkAtSymbol(UrlData.url, UrlData.username),
@@ -129,9 +134,11 @@ export function assess(
     checkPunycode(UrlData.hasPunyCode),
     ...checkDoubleEncoding(UrlData.doubleEncodedCharCount),
     checkSuspiciousEncoding(UrlData.suspiciousEncoding),
+    checkTyposquattingResult(typosquattingCheck),
     checkGoogleResult(googleCheck),
     checkUrlHausResult(urlHausCheck),
     checkUrlHausHostResult(urlHausHostCheck, urlHausCheck),
+    checkEmbeddedLegitimateDomain(UrlData.hostname),
   ].filter((signal): signal is RiskSignal => signal !== null);
 
   const score = signals.reduce((total, signal) => total + signal.points, 0);
@@ -147,6 +154,8 @@ export function assess(
   } else {
     level = "Very High";
   }
+
+  await saveAnalysis(UrlData.url, score, level, apiKeyId);
 
   return {
     score,
@@ -235,6 +244,26 @@ function checkSusTld(tld: string): RiskSignal | null {
   return null;
 }
 
+function decodeRepeatedly(value: string, maxIterations = 3): string {
+  let decoded = value;
+
+  for (let i = 0; i < maxIterations; i++) {
+    try {
+      const next = decodeURIComponent(decoded);
+
+      if (next === decoded) {
+        break;
+      }
+
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+
+  return decoded;
+}
+
 function checkParams(
   parsedUrl: URL,
   params: URLSearchParams,
@@ -249,45 +278,62 @@ function checkParams(
     "returnurl",
     "continue",
     "destination",
+
+    // Common redirect-style parameters
+    "url",
+    "uri",
+    "dest",
+    "target",
+    "target_url",
   ]);
-  const urlParams = new Set(["url", "uri", "dest", "target", "target_url"]);
+
   let score = 0;
   let message = "";
   let feature = "";
 
   for (const [key, value] of params) {
     const normalizedKey = key.toLowerCase();
-    if (redirectParams.has(normalizedKey)) {
-      const redirectUrl = new URL(value, parsedUrl.origin);
-      if (redirectUrl.hostname !== parsedUrl.hostname && score < 4) {
-        score = 4;
-        message =
-          "URL contains a redirect parameter pointing to an external destination";
-      } else if (redirectUrl.hostname === parsedUrl.hostname && score < 1) {
-        score = 1;
-        message =
-          "URL contains a redirect parameter pointing to an internal destination";
-      }
+
+    if (!redirectParams.has(normalizedKey)) {
+      continue;
+    }
+
+    const decodedValue = decodeRepeatedly(value);
+
+    let redirectUrl: URL;
+
+    try {
+      redirectUrl = new URL(decodedValue, parsedUrl.origin);
+    } catch {
+      continue;
+    }
+
+    const isExternal =
+      redirectUrl.hostname.toLowerCase() !== parsedUrl.hostname.toLowerCase();
+
+    if (isExternal && score < 4) {
+      score = 4;
       feature = "redirectParameters";
-    } else if (urlParams.has(normalizedKey)) {
-      const redirectUrl = new URL(value, parsedUrl.origin);
-      if (redirectUrl.hostname !== parsedUrl.hostname && score < 2) {
-        score = 2;
-        message = "URL parameter references an external destination";
-        feature = "externalUrlParameter";
-      }
+      message =
+        "URL contains a redirect parameter pointing to an external destination";
+    } else if (!isExternal && score < 1) {
+      score = 1;
+      feature = "redirectParameters";
+      message =
+        "URL contains a redirect parameter pointing to an internal destination";
     }
   }
 
-  if (message === "") return null;
+  if (message === "") {
+    return null;
+  }
 
   return {
-    feature: feature,
-    message: message,
+    feature,
+    message,
     points: score,
   };
 }
-
 function checkSusKeywords(parsedUrl: URL): RiskSignal | null {
   const suspiciousKeywords = new Set([
     "login",
@@ -483,6 +529,44 @@ function checkSuspiciousEncoding(
   };
 }
 
+function checkEmbeddedLegitimateDomain(hostname: string): RiskSignal | null {
+  const normalizedHostname = hostname.toLowerCase();
+
+  const parsedCandidate = parse(normalizedHostname);
+
+  if (!parsedCandidate.domain) {
+    return null;
+  }
+
+  for (const legitimate of legitimateDomains) {
+    const legitimateDomain = legitimate.domain.toLowerCase();
+
+    if (parsedCandidate.domain === legitimateDomain) {
+      continue;
+    }
+
+    const hostnameLabels = normalizedHostname.split(".");
+    const legitimateLabels = legitimateDomain.split(".");
+
+    for (let i = 0; i <= hostnameLabels.length - legitimateLabels.length; i++) {
+      const candidateLabels = hostnameLabels.slice(
+        i,
+        i + legitimateLabels.length,
+      );
+
+      if (candidateLabels.join(".") === legitimateDomain) {
+        return {
+          feature: "embeddedLegitimateDomain",
+          message: `Hostname contains ${legitimate.brand}'s legitimate domain as a subdomain of another domain`,
+          points: 8,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 function checkLength(feature: string, length: number): RiskSignal | null {
   const baseline = baselines.get(feature)!;
   const maximum = maximums.get(feature)!;
@@ -557,6 +641,25 @@ function checkCount(feature: string, count: number): RiskSignal | null {
   return null;
 }
 
+function checkTyposquattingResult(
+  typosquattingResult: ReturnType<typeof checkTyposquatting>,
+): RiskSignal | null {
+  if (!typosquattingResult.isTyposquatting) {
+    return null;
+  }
+
+  const mutationText =
+    typosquattingResult.mutations.length > 0
+      ? ` (${typosquattingResult.mutations.join(", ")})`
+      : "";
+
+  return {
+    feature: "typosquatting",
+    message: `Domain closely resembles ${typosquattingResult.matchedBrand} (${typosquattingResult.matchedDomain})${mutationText}`,
+    points: 8,
+  };
+}
+
 function checkGoogleResult(googleResult: {
   isThreat: boolean;
   threatTypes: string[];
@@ -585,7 +688,7 @@ function checkGoogleResult(googleResult: {
 
   return {
     feature,
-    message: `Google Safe Browsing flagged this URL as ${threatType}`,
+    message: `Google Safe Browsing identifies this URL or its host as ${threatType}`,
     points: score,
   };
 }

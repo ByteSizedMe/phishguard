@@ -5,3 +5,6 @@ dist/
 !.env.example
 googleTest.ts
 testUrl.ts
+testTyposquatting.ts
+test-db.ts
+test-api-key.ts

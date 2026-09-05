@@ -6,6 +6,7 @@ export interface UrlAnalysis {
   url: string;
   protocol: string;
   hostname: string;
+  originalHostname: string;
   pathname: string;
   port: string;
   search: string;
@@ -47,14 +48,24 @@ export interface SuspiciousEncoding {
   location: EncodingLocation;
 }
 
+function extractOriginalHostname(url: string): string {
+  const match = url.match(
+    /^[a-zA-Z][a-zA-Z\d+.-]*:\/\/(?:[^/?#]*@)?(\[[^\]]+\]|[^/?#:]+)(?::\d+)?(?:[/?#]|$)/,
+  );
+
+  return match?.[1] ?? "";
+}
+
 export function analyzeUrl(url: string): UrlAnalysis {
   const parsedUrl = new URL(url);
+  const originalHostname = extractOriginalHostname(url);
 
   const result: UrlAnalysis = {
     parsedUrl: parsedUrl,
     url: url,
     protocol: parsedUrl.protocol,
     hostname: parsedUrl.hostname,
+    originalHostname: originalHostname,
     pathname: parsedUrl.pathname,
     port: parsedUrl.port,
     search: parsedUrl.search,
@@ -126,7 +137,7 @@ function encodedCharCount(url: string): number {
 }
 
 function getTld(parsedUrl: URL): string {
-  return parsedUrl.hostname.split(".").pop() ?? "";
+  return parse(parsedUrl.hostname).publicSuffix ?? "";
 }
 
 function findDomain(hostname: string): string | null {
