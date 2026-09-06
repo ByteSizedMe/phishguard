@@ -6,6 +6,9 @@ It combines structural URL analysis, typosquatting detection, external reputatio
 
 Built with **Node.js · Express · TypeScript · PostgreSQL**
 
+**Live API:** https://phishguard-d1bp.onrender.com  
+**GitHub:** https://github.com/ByteSizedMe/PhishGuard
+
 ---
 
 ## Features
@@ -17,7 +20,8 @@ Built with **Node.js · Express · TypeScript · PostgreSQL**
 | Typosquatting detection | Damerau-Levenshtein distance, homoglyph, IDN, prefix/suffix mutations |
 | Reputation checks | Google Safe Browsing + URLhaus integration |
 | Batch analysis | Up to 20 URLs per request, processed in parallel |
-| API key authentication | Bearer token auth, bcrypt-hashed storage |
+| API key authentication | Bearer token authentication with bcrypt-hashed storage |
+| Protected key provisioning | API key generation protected by an additional authorization layer |
 | Rate limiting | 100 requests per 15-minute window per IP |
 | Analysis history | Per-key persistent history in PostgreSQL |
 
@@ -85,19 +89,30 @@ URLhaus host matches are informational only (0 points) unless the host is non-Tr
 
 ### Authentication
 
-All protected endpoints require a Bearer token:
+Protected endpoints require a Bearer token:
 
 ```http
 Authorization: Bearer YOUR_API_KEY
 ```
 
+API keys are cryptographically generated and stored server-side only as bcrypt hashes. The raw API key is returned only when it is generated and must be stored securely by the user.
+
+---
+
 ### Endpoints
 
 #### `POST /api/keys` — Generate API Key
 
-Generates a new API key. The raw key is returned once and not stored — save it securely.
+Generates a new PhishGuard API key.
 
-> **Note:** In v1 this endpoint is intended for controlled internal use. Public key provisioning requires additional authorisation logic.
+This endpoint is protected by an additional authorization layer and is intended for controlled API key provisioning.
+
+**Request:**
+
+```http
+Authorization: Bearer ADMIN_AUTHORIZATION
+Content-Type: application/json
+```
 
 **Response:**
 
@@ -106,6 +121,8 @@ Generates a new API key. The raw key is returned once and not stored — save it
   "apiKey": "YOUR_API_KEY"
 }
 ```
+
+The raw API key is returned only once and is not stored directly by PhishGuard. Store it securely after generation.
 
 ---
 
@@ -211,42 +228,71 @@ Authorization: Bearer YOUR_API_KEY
 ]
 ```
 
-History is scoped to the authenticated key — one key cannot access another key's history.
+History is scoped to the authenticated API key. One key cannot access another key's history.
+
+---
+
+#### `GET /` — API Status
+
+Returns basic information about the deployed API.
+
+**Response:**
+
+```json
+{
+  "name": "PhishGuard API",
+  "status": "online",
+  "message": "Phishing and malicious URL analysis API",
+  "endpoints": {
+    "analyze": "POST /api/analyze",
+    "history": "GET /api/history",
+    "apiKeys": "POST /api/keys"
+  }
+}
+```
 
 ---
 
 ## Architecture
 
 ```
-Client
-  |
-  | HTTPS
-  v
-+------------------+
-|   Express API    |
-|  Auth · Limits   |
-+------------------+
-         |
-   +-----+-----+
-   |     |     |
-   v     v     v
- URL  Typo- Reputa-
- Ana- squat- tion
- lyzer  ting  Checks
-   |     |     |
-   +-----+-----+
-         |
-         v
-   Risk Scoring
-         |
-         v
-    PostgreSQL
-   +-----+-----+
-   |           |
-   v           v
-API Keys  Analysis
-          History
+                         Internet
+                            |
+                            v
+                    +----------------+
+                    |  Render Server |
+                    |  Express API   |
+                    +----------------+
+                            |
+              +-------------+-------------+
+              |             |             |
+              v             v             v
+          URL Analysis  Authentication  Rate Limiting
+              |             |
+              v             v
+        Typosquatting    API Keys
+              |
+              v
+       Reputation Checks
+        |             |
+        v             v
+  Google Safe      URLhaus
+   Browsing
+        \             /
+         \           /
+          v         v
+          Risk Scoring
+               |
+               v
+        Supabase PostgreSQL
+          |            |
+          v            v
+       API Keys    Analysis History
 ```
+
+PhishGuard is deployed as a Render web service with persistent PostgreSQL storage hosted on Supabase.
+
+External reputation checks are performed server-side using Google Safe Browsing and URLhaus.
 
 ---
 
@@ -258,6 +304,7 @@ API Keys  Analysis
 | Node.js | Runtime |
 | Express | HTTP API framework |
 | PostgreSQL | Persistent storage |
+| Supabase | Hosted PostgreSQL infrastructure |
 | pg | PostgreSQL driver |
 | bcrypt | API key hashing |
 | Axios | External HTTP requests |
@@ -265,6 +312,7 @@ API Keys  Analysis
 | express-rate-limit | Rate limiting |
 | Google Safe Browsing API | URL reputation |
 | URLhaus API | Malicious URL reputation |
+| Render | API deployment |
 
 ---
 
@@ -318,7 +366,7 @@ PhishGuard/
 ### Installation
 
 ```bash
-git clone YOUR_REPOSITORY_URL
+git clone https://github.com/ByteSizedMe/PhishGuard.git
 cd PhishGuard
 npm install
 ```
@@ -383,12 +431,29 @@ Server runs at `http://localhost:3000` by default.
 |---|---|
 | API key generation | Cryptographically secure random bytes |
 | API key storage | bcrypt hash only — raw key never stored |
+| Key provisioning | Additional authorization layer protects API key generation |
 | Authentication | Bearer token on all protected endpoints |
 | History isolation | Analysis history scoped per API key |
 | Rate limiting | IP-based, 100 req / 15 min |
 | Input validation | All request payloads validated before processing |
 | Secret management | All credentials via environment variables |
 | Reputation API access | Server-side only — credentials never exposed to clients |
+
+---
+
+## Deployment
+
+PhishGuard is deployed as a production REST API on Render.
+
+| Component | Service |
+|---|---|
+| Application | Render Web Service |
+| Database | Supabase PostgreSQL |
+| URL reputation | Google Safe Browsing |
+| Malware reputation | URLhaus |
+| Live API | https://phishguard-d1bp.onrender.com |
+
+The deployed API has been tested externally using independent client applications, including API authentication, URL analysis, rate limiting, and per-key history isolation.
 
 ---
 
@@ -408,11 +473,9 @@ Risk scores are **indicators**, not absolute classifications.
 
 ## Status
 
-**PhishGuard v1** — core backend complete.
+**PhishGuard v1 — deployed and operational.**
 
-Includes URL analysis, explainable risk scoring, typosquatting detection, Google Safe Browsing and URLhaus integration, batch analysis, API key authentication, PostgreSQL persistence, per-key history, and rate limiting.
-
-Deployment in progress.
+Includes URL analysis, explainable risk scoring, typosquatting detection, Google Safe Browsing and URLhaus integration, batch analysis, API key authentication, protected API key provisioning, PostgreSQL persistence, per-key history, rate limiting, and production deployment.
 
 ---
 
