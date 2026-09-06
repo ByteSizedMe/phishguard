@@ -16,6 +16,19 @@ app.use("/api/analyze", analyzeRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/keys", apiRouter);
 
+app.get("/", (req, res) => {
+  res.json({
+    name: "PhishGuard API",
+    status: "online",
+    message: "Phishing and malicious URL analysis API",
+    endpoints: {
+      analyze: "POST /api/analyze",
+      history: "GET /api/history",
+      apiKeys: "POST /api/keys",
+    },
+  });
+});
+
 app.use(
   (
     err: Error,
