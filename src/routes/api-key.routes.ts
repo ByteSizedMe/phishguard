@@ -1,28 +1,42 @@
 import { Router } from "express";
 import { generateApiKey } from "../services/api-key.service";
+import { verifyTurnstileToken } from "../services/turnstile.service";
+import { keyGenerationRateLimit } from "../middleware/key-generation-rate-limit.middleware";
 
 const apiRouter = Router();
 
-apiRouter.post("/", async (req, res) => {
-  const authHeader = req.headers.authorization;
+apiRouter.post("/", keyGenerationRateLimit, async (req, res) => {
+  const { turnstileToken } = req.body;
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Admin API key required" });
-    return;
-  }
-
-  const providedKey = authHeader.substring(7);
-
-  if (!process.env.ADMIN_API_KEY || providedKey !== process.env.ADMIN_API_KEY) {
-    res.status(401).json({ error: "Invalid admin API key" });
+  if (!turnstileToken || typeof turnstileToken !== "string") {
+    res.status(400).json({
+      error: "Turnstile verification required",
+    });
     return;
   }
 
   try {
+    const verified = await verifyTurnstileToken(turnstileToken);
+
+    if (!verified) {
+      res.status(403).json({
+        error: "Turnstile verification failed",
+      });
+      return;
+    }
+
     const apiKey = await generateApiKey();
-    res.json({ apiKey });
-  } catch {
-    res.status(500).json({ error: "Failed to generate API key" });
+
+    res.status(201).json({
+      apiKey,
+      message: "API key generated successfully. Store it securely.",
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      error: "Failed to generate API key",
+    });
   }
 });
 

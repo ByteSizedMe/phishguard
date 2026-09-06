@@ -4,6 +4,7 @@ import cors from "cors";
 import analyzeRouter from "./routes/analyze.routes";
 import historyRouter from "./routes/history.routes";
 import apiRouter from "./routes/api-key.routes";
+import keyPageRouter from "./routes/key-page.routes";
 
 const app = express();
 
@@ -15,6 +16,7 @@ app.use(cors());
 app.use("/api/analyze", analyzeRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/keys", apiRouter);
+app.use("/get-key", keyPageRouter);
 
 app.get("/", (req, res) => {
   res.json({
@@ -25,6 +27,7 @@ app.get("/", (req, res) => {
       analyze: "POST /api/analyze",
       history: "GET /api/history",
       apiKeys: "POST /api/keys",
+      getKey: "GET /get-key",
     },
   });
 });
