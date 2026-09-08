@@ -200,8 +200,8 @@ Content-Type: application/json
 ```json
 {
   "url": "https://paypa1-login.xyz/verify/account",
-  "score": 31,
-  "level": "Very High",
+  "score": 22,
+  "level": "High",
   "signals": [
     {
       "feature": "typosquatting",
